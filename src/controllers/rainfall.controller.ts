@@ -1,194 +1,61 @@
+// src/controllers/rainfall.controller.ts
 import { Request, Response, NextFunction } from 'express';
 import rainfallService from '../services/rainfall.service';
 import { ApiResponse } from '../types/response.types';
+import { isValidDateString } from '../utils/dateHelper';
 
 export class RainfallController {
-  /**
-   * Get all rainfall data for today
-   * GET /api/rainfall/today
-   */
-  async getTodayRainfall(req: Request, res: Response, next: NextFunction) {
+
+  async getRainfallByPumpHouse(req: Request, res: Response, next: NextFunction) {
     try {
-      const records = await rainfallService.getTodayRecords();
+      // Ambil nama pompa dari URL parameter
+      const { name } = req.params;
+      // Ambil tanggal dari Query param (opsional)
+      const dateQuery = req.query.date as string;
 
-      const response: ApiResponse = {
-        success: true,
-        count: records.length,
-        date: new Date().toISOString().split('T')[0],
-        data: records
-      };
+      // Tentukan waktu referensi (Default: Sekarang)
+      let referenceDate = new Date();
 
-      res.json(response);
-    } catch (error) {
-      next(error);
-    }
-  }
+      // Jika user request tanggal spesifik
+      if (dateQuery) {
+        if (!isValidDateString(dateQuery)) {
+           return res.status(400).json({
+             success: false,
+             error: 'Invalid date format. Use ISO format (e.g., 2025-11-25T23:00:00)'
+           });
+        }
+        referenceDate = new Date(dateQuery);
+      }
 
-  /**
-   * Get rainfall data by specific date
-   * GET /api/rainfall/date/:date
-   */
-  async getRainfallByDate(req: Request, res: Response, next: NextFunction) {
-    try {
-      const { date } = req.params;
-      const targetDate = new Date(date);
+      // Panggil Service
+      const result = await rainfallService.getPumpHouseWindowData(name, referenceDate);
 
-      if (isNaN(targetDate.getTime())) {
-        return res.status(400).json({
+      if (!result) {
+        return res.status(404).json({
           success: false,
-          error: 'Invalid date format. Use YYYY-MM-DD'
+          message: `No rainfall data found for '${name}' around ${referenceDate.toISOString()}`
         });
       }
 
-      const records = await rainfallService.getRecordsByDate(targetDate);
-
       const response: ApiResponse = {
         success: true,
-        count: records.length,
-        date: date,
-        data: records
+        result: result
       };
 
       res.json(response);
+
     } catch (error) {
       next(error);
     }
   }
 
-  /**
-   * Get rainfall data by pump house name
-   * GET /api/rainfall/pump-house/:name
-   */
-  async getRainfallByPumpHouse(req: Request, res: Response, next: NextFunction) {
-    try {
-      const { name } = req.params;
-      const records = await rainfallService.getRecordsByPumpHouse(name);
-
-      const response: ApiResponse = {
-        success: true,
-        count: records.length,
-        pumpHouse: name,
-        date: new Date().toISOString().split('T')[0],
-        data: records
-      };
-
-      res.json(response);
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  /**
-   * Get latest rainfall data
-   * GET /api/rainfall/latest
-   */
   async getLatestRainfall(req: Request, res: Response, next: NextFunction) {
     try {
       const record = await rainfallService.getLatestRecord();
-
       if (!record) {
-        return res.status(404).json({
-          success: false,
-          error: 'No rainfall data found'
-        });
+        return res.status(404).json({ success: false, error: 'No data available' });
       }
-
-      const response: ApiResponse = {
-        success: true,
-        data: record
-      };
-
-      res.json(response);
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  /**
-   * Get all pump houses with rainfall today
-   * GET /api/rainfall/pump-houses
-   */
-  async getPumpHouses(req: Request, res: Response, next: NextFunction) {
-    try {
-      const pumpHouses = await rainfallService.getTodayPumpHouses();
-
-      const response: ApiResponse = {
-        success: true,
-        count: pumpHouses.length,
-        date: new Date().toISOString().split('T')[0],
-        data: pumpHouses
-      };
-
-      res.json(response);
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  /**
-   * Get rainfall summary for today
-   * GET /api/rainfall/summary/today
-   */
-  async getTodaySummary(req: Request, res: Response, next: NextFunction) {
-    try {
-      const summary = await rainfallService.getTodaySummary();
-
-      const response: ApiResponse = {
-        success: true,
-        date: new Date().toISOString().split('T')[0],
-        data: summary
-      };
-
-      res.json(response);
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  /**
-   * Get rainfall data by radar station
-   * GET /api/rainfall/station/:station
-   */
-  async getRainfallByStation(req: Request, res: Response, next: NextFunction) {
-    try {
-      const { station } = req.params;
-      const records = await rainfallService.getRecordsByRadarStation(station);
-
-      const response: ApiResponse = {
-        success: true,
-        count: records.length,
-        station: station.toUpperCase(),
-        date: new Date().toISOString().split('T')[0],
-        data: records
-      };
-
-      res.json(response);
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  /**
-   * Get rainfall alerts (high rain rate locations)
-   * GET /api/rainfall/alerts
-   */
-  async getRainfallAlerts(req: Request, res: Response, next: NextFunction) {
-    try {
-      const minRainRate = req.query.minRainRate
-        ? parseFloat(req.query.minRainRate as string)
-        : 5;
-
-      const alerts = await rainfallService.getTodayAlerts(minRainRate);
-
-      const response: ApiResponse = {
-        success: true,
-        count: alerts.length,
-        minRainRate,
-        date: new Date().toISOString().split('T')[0],
-        data: alerts
-      };
-
-      res.json(response);
+      res.json({ success: true, data: record });
     } catch (error) {
       next(error);
     }

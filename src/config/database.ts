@@ -9,10 +9,8 @@ interface DatabaseConfig {
 }
 
 interface DatabaseConnections {
-  curahHujan: typeof mongoose;
-  // Tambahkan database lain di sini
-  // pompa?: typeof mongoose;
-  // monitoring?: typeof mongoose;
+  curahHujan: typeof mongoose; // Untuk RainfallRecord (Radar)
+  prediksi: typeof mongoose;   // Untuk Prediction (Forecast) - SEKARANG DI DB YANG SAMA
 }
 
 class DatabaseManager {
@@ -29,100 +27,57 @@ class DatabaseManager {
     };
   }
 
-  /**
-   * Generate MongoDB connection URI
-   */
   private generateURI(dbName: string): string {
     const { host, port, user, password, authSource } = this.config;
-
     if (user && password) {
       return `mongodb://${user}:${password}@${host}:${port}/${dbName}?authSource=${authSource}&directConnection=true`;
     }
-
     return `mongodb://${host}:${port}/${dbName}?directConnection=true`;
   }
 
-  /**
-   * Connect to a specific database
-   */
-  async connect(dbName: string, connectionName: keyof DatabaseConnections = 'curahHujan') {
+  async connect(dbName: string, connectionName: keyof DatabaseConnections) {
     try {
       const uri = this.generateURI(dbName);
-
       const connection = await mongoose.createConnection(uri, {
         serverSelectionTimeoutMS: 5000,
         socketTimeoutMS: 45000,
       }).asPromise();
 
       this.connections[connectionName] = connection as any;
-
-      console.log(`✅ Connected to MongoDB: ${dbName}`);
-      console.log(`📍 Database: ${connection.name}`);
-      console.log(`🔗 Host: ${connection.host}:${connection.port}`);
-
+      console.log(`✅ Connected to MongoDB: ${dbName} (${connectionName})`);
       return connection;
     } catch (error) {
-      console.error(`❌ MongoDB connection error (${dbName}):`, error instanceof Error ? error.message : error);
-      this.printTroubleshooting();
+      console.error(`❌ Connection error (${dbName}):`, error instanceof Error ? error.message : error);
       throw error;
     }
   }
 
   /**
-   * Connect to default database (db_curah_hujan)
+   * Connect ke database
    */
-  async connectDefault() {
+  async connectAll() {
     const dbName = process.env.DB_CURAH_HUJAN || 'db_curah_hujan';
-    return this.connect(dbName, 'curahHujan');
+
+    // 1. Database Radar (db_curah_hujan)
+    await this.connect(dbName, 'curahHujan');
+
+    // 2. Database Prediksi (SEKARANG SAMA: db_curah_hujan)
+    // Karena Python script menyimpannya di db_curah_hujan > prediksi
+    await this.connect(dbName, 'prediksi');
   }
 
-  /**
-   * Connect to multiple databases
-   */
-  async connectMultiple(databases: { name: string; connectionName: keyof DatabaseConnections }[]) {
-    const promises = databases.map(db => this.connect(db.name, db.connectionName));
-    return Promise.all(promises);
-  }
-
-  /**
-   * Get connection by name
-   */
   getConnection(name: keyof DatabaseConnections) {
     return this.connections[name];
   }
 
-  /**
-   * Close all connections
-   */
   async closeAll() {
     const closePromises = Object.values(this.connections).map(conn => {
       if (conn) return conn.disconnect();
       return Promise.resolve();
     });
-
     await Promise.all(closePromises);
     console.log('🔌 All database connections closed');
   }
-
-  /**
-   * Print troubleshooting tips
-   */
-  private printTroubleshooting() {
-    console.log('');
-    console.log('💡 Troubleshooting Tips:');
-    console.log('   1. Check if MongoDB is running');
-    console.log('   2. Verify credentials in .env file');
-    console.log('   3. Check network connectivity');
-    console.log('   4. Verify authSource is correct (usually "admin")');
-    console.log('   5. Check if user has access to the database');
-    console.log('');
-  }
 }
 
-// Export singleton instance
 export const dbManager = new DatabaseManager();
-
-// Export simple connect function for backward compatibility
-export const connectDB = async () => {
-  return dbManager.connectDefault();
-};
