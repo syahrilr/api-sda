@@ -11,79 +11,61 @@ export class RainfallController {
       const dateQuery = req.query.date as string;
       const rangeQuery = req.query.range as string;
 
-      // Default Setup (Hari Ini)
+      // --- SETUP DATE (Sama seperti sebelumnya) ---
       let startDate = new Date();
       startDate.setHours(0, 0, 0, 0);
-
       let endDate = new Date();
       endDate.setHours(endDate.getHours() + 24);
 
-      // LOGIC FILTER
       if (dateQuery && isValidDateString(dateQuery)) {
         const specificDate = new Date(dateQuery);
         startDate = new Date(specificDate);
         startDate.setHours(0, 0, 0, 0);
-
         endDate = new Date(specificDate);
         endDate.setHours(23, 59, 59, 999);
       }
       else if (rangeQuery) {
-        // Base Reference untuk perhitungan menit/jam
         const now = new Date();
-
-        // Reset base untuk case mingguan/bulanan
         startDate = new Date();
         endDate = new Date();
 
         switch (rangeQuery) {
-          // --- TAMBAHAN BARU: 32 MENIT ---
           case '32min':
-            // Start: 32 menit yang lalu
             startDate = new Date(now.getTime() - (32 * 60 * 1000));
-            // End: 32 menit ke depan
             endDate = new Date(now.getTime() + (32 * 60 * 1000));
             break;
-          // -------------------------------
-
+          // ... (case 1w, 1m, 2m, 3m, today biarkan sama seperti kode sebelumnya)
           case '1w':
             startDate.setDate(startDate.getDate() - 7);
             startDate.setHours(0, 0, 0, 0);
-
             endDate = new Date();
             endDate.setDate(endDate.getDate() - 1);
             endDate.setHours(23, 59, 59, 999);
             break;
-
           case '1m':
             startDate.setMonth(startDate.getMonth() - 1);
             startDate.setDate(1);
             startDate.setHours(0, 0, 0, 0);
-
             endDate = new Date();
             endDate.setDate(0);
             endDate.setHours(23, 59, 59, 999);
             break;
-
           case '2m':
             startDate.setMonth(startDate.getMonth() - 2);
             startDate.setDate(1);
             startDate.setHours(0, 0, 0, 0);
-
             endDate = new Date();
             endDate.setDate(0);
             endDate.setHours(23, 59, 59, 999);
             break;
-
           case '3m':
             startDate.setMonth(startDate.getMonth() - 3);
             startDate.setDate(1);
             startDate.setHours(0, 0, 0, 0);
-
             endDate = new Date();
             endDate.setDate(0);
             endDate.setHours(23, 59, 59, 999);
             break;
-
           case 'today':
           default:
             startDate.setHours(0, 0, 0, 0);
@@ -92,8 +74,9 @@ export class RainfallController {
         }
       }
 
-      console.log(`\n📅 [Rainfall] Date Filter: ${startDate.toISOString()} s/d ${endDate.toISOString()}`);
+      console.log(`\n📅 [Rainfall] Filter: ${startDate.toISOString()} s/d ${endDate.toISOString()}`);
 
+      // Panggil Service (Dapat data lengkap: history + forecast + summary)
       const result = await rainfallService.getPumpHouseWindowData(name, startDate, endDate);
 
       if (!result) {
@@ -103,6 +86,31 @@ export class RainfallController {
         });
       }
 
+      // === LOGIKA TRANSFORMASI RESPONSE ===
+      // Jika filter 32min, kita gabung history & forecast jadi satu array 'data'
+      if (rangeQuery === '32min') {
+        // 1. Gabung Array
+        const mergedData = [
+          ...(result.history || []),
+          ...(result.forecast || [])
+        ];
+
+        // 2. Sort berdasarkan waktu
+        mergedData.sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
+
+        // 3. Return format khusus (tanpa summary, tanpa history/forecast terpisah)
+        return res.json({
+          success: true,
+          result: {
+            pumpHouse: result.pumpHouse,
+            bounds: result.bounds,
+            location: result.location,
+            data: mergedData // Array gabungan
+          }
+        });
+      }
+
+      // Jika filter LAIN (1w, 1m, today), return format standard lengkap
       const response: ApiResponse = {
         success: true,
         result: result
