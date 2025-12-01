@@ -11,112 +11,107 @@ export class RainfallController {
       const dateQuery = req.query.date as string;
       const rangeQuery = req.query.range as string;
 
-      // --- SETUP DATE (Sama seperti sebelumnya) ---
+      // Setup default (Hari Ini)
       let startDate = new Date();
-      startDate.setHours(0, 0, 0, 0);
+      startDate.setHours(-7, 0, 0, 0); // 00:00 WIB
+
       let endDate = new Date();
       endDate.setHours(endDate.getHours() + 24);
 
       if (dateQuery && isValidDateString(dateQuery)) {
         const specificDate = new Date(dateQuery);
         startDate = new Date(specificDate);
-        startDate.setHours(0, 0, 0, 0);
+        startDate.setHours(-7, 0, 0, 0);
         endDate = new Date(specificDate);
-        endDate.setHours(23, 59, 59, 999);
+        endDate.setHours(16, 59, 59, 999); // 23:59 WIB
       }
       else if (rangeQuery) {
         const now = new Date();
-        startDate = new Date();
-        endDate = new Date();
+        const baseDate = new Date();
+        baseDate.setDate(1); // Reset ke tanggal 1 bulan ini
 
         switch (rangeQuery) {
           case '32min':
             startDate = new Date(now.getTime() - (32 * 60 * 1000));
             endDate = new Date(now.getTime() + (32 * 60 * 1000));
             break;
-          // ... (case 1w, 1m, 2m, 3m, today biarkan sama seperti kode sebelumnya)
+
           case '1w':
+            startDate = new Date();
             startDate.setDate(startDate.getDate() - 7);
-            startDate.setHours(0, 0, 0, 0);
+            startDate.setHours(-7, 0, 0, 0);
+
             endDate = new Date();
             endDate.setDate(endDate.getDate() - 1);
-            endDate.setHours(23, 59, 59, 999);
+            endDate.setHours(16, 59, 59, 999); // Kemarin 23:59 WIB
             break;
+
           case '1m':
-            startDate.setMonth(startDate.getMonth() - 1);
-            startDate.setDate(1);
-            startDate.setHours(0, 0, 0, 0);
-            endDate = new Date();
-            endDate.setDate(0);
-            endDate.setHours(23, 59, 59, 999);
+            // 1 Bulan Lalu FULL (Misal skrg Des -> Full Nov)
+            startDate = new Date(baseDate);
+            startDate.setMonth(baseDate.getMonth() - 1);
+            startDate.setHours(-7, 0, 0, 0); // 00:00 WIB
+
+            endDate = new Date(baseDate);
+            endDate.setDate(0); // Tanggal 0 bulan ini = Akhir bulan lalu
+            endDate.setHours(16, 59, 59, 999); // 23:59 WIB
             break;
+
           case '2m':
-            startDate.setMonth(startDate.getMonth() - 2);
-            startDate.setDate(1);
-            startDate.setHours(0, 0, 0, 0);
-            endDate = new Date();
-            endDate.setDate(0);
-            endDate.setHours(23, 59, 59, 999);
+            // 2 Bulan Lalu FULL (Misal skrg Des -> Full Okt)
+            startDate = new Date(baseDate);
+            startDate.setMonth(baseDate.getMonth() - 2);
+            startDate.setHours(-7, 0, 0, 0); // 00:00 WIB
+
+            endDate = new Date(baseDate);
+            endDate.setMonth(baseDate.getMonth() - 1); // Mundur ke bulan lalu
+            endDate.setDate(0); // Ambil akhir bulannya
+            endDate.setHours(16, 59, 59, 999); // 23:59 WIB
             break;
+
           case '3m':
-            startDate.setMonth(startDate.getMonth() - 3);
-            startDate.setDate(1);
-            startDate.setHours(0, 0, 0, 0);
-            endDate = new Date();
+            // 3 Bulan Lalu FULL (Misal skrg Des -> Full Sept)
+            startDate = new Date(baseDate);
+            startDate.setMonth(baseDate.getMonth() - 3);
+            startDate.setHours(-7, 0, 0, 0);
+
+            endDate = new Date(baseDate);
+            endDate.setMonth(baseDate.getMonth() - 2);
             endDate.setDate(0);
-            endDate.setHours(23, 59, 59, 999);
+            endDate.setHours(16, 59, 59, 999); // 23:59 WIB
             break;
+
           case 'today':
           default:
-            startDate.setHours(0, 0, 0, 0);
+            startDate = new Date();
+            startDate.setHours(-7, 0, 0, 0); // 00:00 WIB
+            endDate = new Date();
             endDate.setHours(endDate.getHours() + 24);
             break;
         }
       }
 
-      console.log(`\n📅 [Rainfall] Filter: ${startDate.toISOString()} s/d ${endDate.toISOString()}`);
+      console.log(`\n📅 [Rainfall] Filter (UTC): ${startDate.toISOString()} s/d ${endDate.toISOString()}`);
 
-      // Panggil Service (Dapat data lengkap: history + forecast + summary)
       const result = await rainfallService.getPumpHouseWindowData(name, startDate, endDate);
 
-      if (!result) {
-        return res.status(404).json({
-          success: false,
-          message: `No rainfall data found for '${name}' in range`
-        });
-      }
+      if (!result) return res.status(404).json({ success: false, message: `No data` });
 
-      // === LOGIKA TRANSFORMASI RESPONSE ===
-      // Jika filter 32min, kita gabung history & forecast jadi satu array 'data'
       if (rangeQuery === '32min') {
-        // 1. Gabung Array
-        const mergedData = [
-          ...(result.history || []),
-          ...(result.forecast || [])
-        ];
-
-        // 2. Sort berdasarkan waktu
+        const mergedData = [...(result.history || []), ...(result.forecast || [])];
         mergedData.sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
-
-        // 3. Return format khusus (tanpa summary, tanpa history/forecast terpisah)
         return res.json({
           success: true,
           result: {
             pumpHouse: result.pumpHouse,
             bounds: result.bounds,
             location: result.location,
-            data: mergedData // Array gabungan
+            data: mergedData
           }
         });
       }
 
-      // Jika filter LAIN (1w, 1m, today), return format standard lengkap
-      const response: ApiResponse = {
-        success: true,
-        result: result
-      };
-
-      res.json(response);
+      res.json({ success: true, result: result });
 
     } catch (error) {
       next(error);
@@ -126,9 +121,7 @@ export class RainfallController {
   async getLatestRainfall(req: Request, res: Response, next: NextFunction) {
     try {
       const record = await rainfallService.getLatestRecord();
-      if (!record) {
-        return res.status(404).json({ success: false, error: 'No data available' });
-      }
+      if (!record) return res.status(404).json({ success: false, error: 'No data' });
       res.json({ success: true, data: record });
     } catch (error) {
       next(error);
