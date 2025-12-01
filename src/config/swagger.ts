@@ -1,11 +1,15 @@
-// index.ts atau swagger.ts
 import swaggerJsdoc from 'swagger-jsdoc';
-import dotenv from 'dotenv';
-
-dotenv.config();
 
 const PORT = process.env.PORT || 8001;
-const API_URL = process.env.API_URL || `http://localhost:${PORT}`;
+const NODE_ENV = process.env.NODE_ENV || 'development';
+
+// Tentukan server URL berdasarkan environment
+const getServerUrl = () => {
+  if (NODE_ENV === 'production') {
+    return 'http://192.168.5.173:8001';
+  }
+  return `http://localhost:${PORT}`;
+};
 
 const options = {
   definition: {
@@ -20,25 +24,16 @@ const options = {
     },
     servers: [
       {
-        url: API_URL,
-        description: process.env.NODE_ENV === 'production'
+        url: getServerUrl(),
+        description: NODE_ENV === 'production'
           ? 'Production Server'
-          : 'Development Server',
+          : 'Local Development Server',
       },
-      // Opsional: tampilkan semua server untuk fleksibilitas
-      ...(process.env.SHOW_ALL_SERVERS === 'true' ? [
-        {
-          url: `http://localhost:${PORT}`,
-          description: 'Local Development',
-        },
-        {
-          url: 'http://192.168.5.173:8001',
-          description: 'Server Kantor',
-        },
-      ] : []),
     ],
   },
   apis: ['./src/routes/*.ts', './dist/routes/*.js'],
 };
+
+console.log(`🌐 Swagger Server URL: ${getServerUrl()} (${NODE_ENV})`);
 
 export const swaggerSpec = swaggerJsdoc(options);

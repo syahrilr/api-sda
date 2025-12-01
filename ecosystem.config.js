@@ -8,12 +8,12 @@ module.exports = {
     max_memory_restart: '1G',
     env: {
       NODE_ENV: 'production',
-      PORT: 8000,
+      PORT: 8001,
       TZ: 'UTC'  // PENTING: Memaksa environment PM2 menggunakan UTC
     },
     env_production: {
       NODE_ENV: 'production',
-      PORT: 8000,
+      PORT: 8001,
       TZ: 'UTC'  // PENTING: Memaksa environment PM2 menggunakan UTC
     },
     error_file: './logs/err.log',
