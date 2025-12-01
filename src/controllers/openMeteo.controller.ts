@@ -1,4 +1,3 @@
-// src/controllers/openMeteo.controller.ts
 import { Request, Response, NextFunction } from 'express';
 import openMeteoService from '../services/openMeteo.service';
 import { ApiResponse } from '../types/response.types';
@@ -10,57 +9,92 @@ export class OpenMeteoController {
     try {
       const { name } = req.params;
       const dateQuery = req.query.date as string;
-      const rangeQuery = req.query.range as string; // 'today', '1w', '1m', '3m'
-
-      // Default: Hari ini
-      let endDate = new Date();
-      // Kita tambahkan buffer 48 jam ke depan untuk default view agar prediksi terlihat
-      endDate.setHours(endDate.getHours() + 48);
+      const rangeQuery = req.query.range as string;
 
       let startDate = new Date();
-      startDate.setHours(0, 0, 0, 0); // Default start jam 00:00 hari ini
+      startDate.setHours(-7, 0, 0, 0);
 
-      // CASE 1: User minta tanggal spesifik (?date=2025-11-25)
+      let endDate = new Date();
+      endDate.setDate(endDate.getDate() + 16);
+
+      // Variable baru untuk menampung batas history strict
+      let strictHistoryDate: Date | undefined = undefined;
+
+      // CASE 1: Tanggal Spesifik
       if (dateQuery && isValidDateString(dateQuery)) {
         const specificDate = new Date(dateQuery);
         startDate = new Date(specificDate);
-        startDate.setHours(0, 0, 0, 0);
+        startDate.setHours(-7, 0, 0, 0);
 
         endDate = new Date(specificDate);
-        endDate.setHours(23, 59, 59, 999);
+        endDate.setHours(16, 59, 59, 999);
       }
-      // CASE 2: User minta range (?range=1w)
+      // CASE 2: Range Filter
       else if (rangeQuery) {
-        // Reset endDate ke saat ini + buffer prediksi
-        endDate = new Date();
-        endDate.setHours(endDate.getHours() + 48);
-
         startDate = new Date();
 
+        endDate = new Date();
+        endDate.setDate(endDate.getDate() + 16);
+
         switch (rangeQuery) {
-          case '1w': // 1 Minggu lalu
+          case '5h':
+            const now = new Date();
+            startDate = new Date(now.getTime() - (5 * 60 * 60 * 1000));
+            endDate = new Date(now.getTime() + (5 * 60 * 60 * 1000));
+            break;
+
+          case '1w':
             startDate.setDate(startDate.getDate() - 7);
+            startDate.setHours(-7, 0, 0, 0);
+            // 1w biasanya mau exclude hari ini
+            strictHistoryDate = new Date();
+            strictHistoryDate.setDate(strictHistoryDate.getDate() - 1); // Kemarin
+            strictHistoryDate.setHours(16, 59, 59, 999);
             break;
-          case '1m': // 1 Bulan lalu
+
+          case '1m':
             startDate.setMonth(startDate.getMonth() - 1);
+            startDate.setDate(1);
+            startDate.setHours(-7, 0, 0, 0);
+
+            // STRICT: History stop di akhir bulan lalu
+            strictHistoryDate = new Date();
+            strictHistoryDate.setDate(0); // Tanggal 0 = Akhir bulan lalu
+            strictHistoryDate.setHours(16, 59, 59, 999);
             break;
-          case '2m': // 2 Bulan lalu
+
+          case '2m':
             startDate.setMonth(startDate.getMonth() - 2);
+            startDate.setDate(1);
+            startDate.setHours(-7, 0, 0, 0);
+
+            strictHistoryDate = new Date();
+            strictHistoryDate.setDate(0);
+            strictHistoryDate.setHours(16, 59, 59, 999);
             break;
-          case '3m': // 3 Bulan lalu
+
+          case '3m':
             startDate.setMonth(startDate.getMonth() - 3);
+            startDate.setDate(1);
+            startDate.setHours(-7, 0, 0, 0);
+
+            strictHistoryDate = new Date();
+            strictHistoryDate.setDate(0);
+            strictHistoryDate.setHours(16, 59, 59, 999);
             break;
+
           case 'today':
           default:
-            startDate.setHours(0, 0, 0, 0);
+            startDate.setHours(-7, 0, 0, 0);
+            // Hari ini tidak perlu strictHistoryDate, biarkan ambil semua history yang ada
             break;
         }
       }
 
-      console.log(`\n📅 [OpenMeteo] Date Filter: ${startDate.toISOString()} s/d ${endDate.toISOString()}`);
+      console.log(`\n📅 [OpenMeteo] Filter: ${startDate.toISOString()} s/d ${endDate.toISOString()}`);
 
-      // Panggil Service dengan Start & End Date eksplisit
-      const result = await openMeteoService.getOpenMeteoData(name, startDate, endDate);
+      // Panggil Service dengan parameter ke-4 (strictHistoryDate)
+      const result = await openMeteoService.getOpenMeteoData(name, startDate, endDate, strictHistoryDate);
 
       if (!result) {
         return res.status(404).json({

@@ -1,4 +1,3 @@
-// src/controllers/rainfall.controller.ts
 import { Request, Response, NextFunction } from 'express';
 import rainfallService from '../services/rainfall.service';
 import { ApiResponse } from '../types/response.types';
@@ -10,14 +9,16 @@ export class RainfallController {
     try {
       const { name } = req.params;
       const dateQuery = req.query.date as string;
-      const rangeQuery = req.query.range as string; // 'today', '1w', '1m', '2m', '3m'
+      const rangeQuery = req.query.range as string;
 
-      // Default: Hari ini (Start 00:00 - End Sekarang/Nanti)
-      let endDate = new Date();
+      // Default Setup (Hari Ini)
       let startDate = new Date();
-      startDate.setHours(0, 0, 0, 0); // Default start hari ini jam 00:00
+      startDate.setHours(0, 0, 0, 0);
 
-      // CASE 1: User minta tanggal spesifik (?date=2025-11-25)
+      let endDate = new Date();
+      endDate.setHours(endDate.getHours() + 24);
+
+      // LOGIC FILTER
       if (dateQuery && isValidDateString(dateQuery)) {
         const specificDate = new Date(dateQuery);
         startDate = new Date(specificDate);
@@ -26,37 +27,73 @@ export class RainfallController {
         endDate = new Date(specificDate);
         endDate.setHours(23, 59, 59, 999);
       }
-      // CASE 2: User minta range (?range=1w)
       else if (rangeQuery) {
-        endDate = new Date(); // Sampai detik ini
-        // Kita set endDate sedikit ke depan agar prediksi dekat-dekat ini masuk
-        endDate.setHours(endDate.getHours() + 2);
+        // Base Reference untuk perhitungan menit/jam
+        const now = new Date();
 
+        // Reset base untuk case mingguan/bulanan
         startDate = new Date();
+        endDate = new Date();
 
         switch (rangeQuery) {
-          case '1w': // 1 Minggu lalu
+          // --- TAMBAHAN BARU: 32 MENIT ---
+          case '32min':
+            // Start: 32 menit yang lalu
+            startDate = new Date(now.getTime() - (32 * 60 * 1000));
+            // End: 32 menit ke depan
+            endDate = new Date(now.getTime() + (32 * 60 * 1000));
+            break;
+          // -------------------------------
+
+          case '1w':
             startDate.setDate(startDate.getDate() - 7);
+            startDate.setHours(0, 0, 0, 0);
+
+            endDate = new Date();
+            endDate.setDate(endDate.getDate() - 1);
+            endDate.setHours(23, 59, 59, 999);
             break;
-          case '1m': // 1 Bulan lalu
+
+          case '1m':
             startDate.setMonth(startDate.getMonth() - 1);
+            startDate.setDate(1);
+            startDate.setHours(0, 0, 0, 0);
+
+            endDate = new Date();
+            endDate.setDate(0);
+            endDate.setHours(23, 59, 59, 999);
             break;
-          case '2m': // 2 Bulan lalu
+
+          case '2m':
             startDate.setMonth(startDate.getMonth() - 2);
+            startDate.setDate(1);
+            startDate.setHours(0, 0, 0, 0);
+
+            endDate = new Date();
+            endDate.setDate(0);
+            endDate.setHours(23, 59, 59, 999);
             break;
-          case '3m': // 3 Bulan lalu
+
+          case '3m':
             startDate.setMonth(startDate.getMonth() - 3);
+            startDate.setDate(1);
+            startDate.setHours(0, 0, 0, 0);
+
+            endDate = new Date();
+            endDate.setDate(0);
+            endDate.setHours(23, 59, 59, 999);
             break;
+
           case 'today':
           default:
             startDate.setHours(0, 0, 0, 0);
+            endDate.setHours(endDate.getHours() + 24);
             break;
         }
       }
 
-      console.log(`\n📅 Date Filter: ${startDate.toISOString()} s/d ${endDate.toISOString()}`);
+      console.log(`\n📅 [Rainfall] Date Filter: ${startDate.toISOString()} s/d ${endDate.toISOString()}`);
 
-      // Panggil Service dengan Start & End Date eksplisit
       const result = await rainfallService.getPumpHouseWindowData(name, startDate, endDate);
 
       if (!result) {

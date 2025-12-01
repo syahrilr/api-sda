@@ -1,4 +1,3 @@
-// src/services/openMeteo.service.ts
 import { Connection } from 'mongoose';
 import { getHistoryModel, getPredictModel } from '../models/openMeteo.model';
 import { RainfallDataResult, TimeSeriesData } from '../types/response.types';
@@ -13,87 +12,87 @@ export class OpenMeteoService {
     this.predictConnection = predictConn;
   }
 
-  private getCollectionName(name: string, prefix: string = ''): string {
+  private getCollectionName(name: string, type: 'history' | 'prediction'): string {
     let clean = name.toLowerCase().replace(/[^a-z0-9]/g, '_');
     clean = clean.replace(/_+/g, '_');
-    return prefix ? `${prefix}_${clean}` : clean;
+    clean = clean.replace(/^_|_$/g, '');
+
+    if (type === 'prediction') {
+      return `prediction_${clean}`;
+    }
+    return clean;
   }
 
-  // Helper: Format Date ke YYYY-MM-DD (Key di DB History)
   private formatDateKey(date: Date): string {
-    // Kita gunakan local parts karena data disimpan per tanggal lokal (biasanya)
-    // Atau gunakan ISO split jika konsisten UTC
     return date.toISOString().split('T')[0];
   }
 
-  // Helper: Parse string waktu dari OpenMeteo (biasanya ISO-like) ke Date Object
   private parseTimeString(timeStr: string): Date {
     const datePart = timeStr.split('T')[0];
     const timePart = timeStr.split('T')[1];
-    // Asumsi timeStr adalah UTC/GMT+0 dari OpenMeteo,
-    // Tapi jika data mentah sudah WIB, sesuaikan offsetnya.
-    // Di sini asumsi logic lama: kurangi 7 jam
     const tempDate = new Date(`${datePart}T${timePart}:00.000Z`);
+    // Adjust Timezone WIB (-7 jam)
     return new Date(tempDate.getTime() - (7 * 60 * 60 * 1000));
   }
 
-  async getOpenMeteoData(pumpName: string, startTime: Date, endTime: Date): Promise<RainfallDataResult | null> {
+  async getOpenMeteoData(pumpName: string, startTime: Date, endTime: Date, historyMaxDate?: Date): Promise<RainfallDataResult | null> {
 
-    console.log(`🔍 [OpenMeteoService] Request: ${pumpName}`);
-    console.log(`⏰ Window: ${startTime.toISOString()} <-> ${endTime.toISOString()}`);
+    // Batas Akhir History adalah parameter historyMaxDate ATAU Sekarang (new Date)
+    // Ini menjadi "Garis Batas": Kiri = History, Kanan = Forecast
+    const effectiveHistoryEnd = historyMaxDate || new Date();
+
+    console.log(`\n🔍 [OpenMeteo] Req: ${pumpName}`);
+    // console.log(`📅 Cut-Off Time: ${effectiveHistoryEnd.toISOString()}`);
 
     // ==========================================
     // 1. FETCH DATA HISTORY
     // ==========================================
-    const historyCollName = this.getCollectionName(pumpName);
+    const historyCollName = this.getCollectionName(pumpName, 'history');
     const HistoryModel = getHistoryModel(this.historyConnection!, historyCollName);
 
-    // Generate array tanggal (YYYY-MM-DD) dari startTime s/d endTime
-    // Karena data history disimpan per dokumen = 1 hari
     const dateKeys: string[] = [];
     let loopDate = new Date(startTime);
-    // Mundurkan loopDate sedikit agar jika jam 00:00 tetap kena hari sebelumnya jika perlu (timezone issue)
-    loopDate.setHours(loopDate.getHours() - 7);
+    loopDate.setDate(loopDate.getDate() - 1);
 
-    const loopEnd = new Date(endTime);
+    const loopEnd = new Date(effectiveHistoryEnd);
+    loopEnd.setDate(loopEnd.getDate() + 1);
 
-    // Loop per hari untuk mengumpulkan Key
     while (loopDate <= loopEnd) {
         const key = this.formatDateKey(loopDate);
         if (!dateKeys.includes(key)) dateKeys.push(key);
         loopDate.setDate(loopDate.getDate() + 1);
     }
-    // Pastikan end date key masuk
-    const endKey = this.formatDateKey(loopEnd);
-    if (!dateKeys.includes(endKey)) dateKeys.push(endKey);
 
     const historyDocs = await HistoryModel.find({
       date: { $in: dateKeys }
-    });
+    }).lean();
 
     const historyData: TimeSeriesData[] = [];
 
-    historyDocs.forEach(doc => {
-      if (doc.hourly) {
-        Object.values(doc.hourly).forEach((hourData: any) => {
-          if (hourData.time) {
-            const itemTime = this.parseTimeString(hourData.time);
+    historyDocs.forEach((doc: any) => {
+      const processHour = (hourData: any) => {
+        if (hourData.time) {
+          const itemTime = this.parseTimeString(hourData.time);
 
-            // Filter Ketat: >= startTime DAN <= endTime
-            // Dan pastikan <= Waktu Sekarang (karena ini History)
-            const now = new Date();
-            if (itemTime >= startTime && itemTime <= endTime && itemTime <= now) {
-              historyData.push({
-                time: hourData.time.replace('T', ' '),
-                value: hourData.rain || 0
-              });
-            }
+          // FILTER HISTORY:
+          // Ambil jika masuk range Start - End
+          // DAN wajib <= effectiveHistoryEnd (Masa Lalu / Sekarang)
+          if (itemTime >= startTime && itemTime <= effectiveHistoryEnd) {
+            historyData.push({
+              time: hourData.time.replace('T', ' '),
+              value: hourData.rain || 0
+            });
           }
-        });
+        }
+      };
+
+      if (doc.hourly_data && Array.isArray(doc.hourly_data)) {
+        doc.hourly_data.forEach(processHour);
+      } else if (doc.hourly) {
+        Object.values(doc.hourly).forEach(processHour);
       }
     });
 
-    // Sort ascending
     historyData.sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
 
     // ==========================================
@@ -102,30 +101,34 @@ export class OpenMeteoService {
     const predictCollName = this.getCollectionName(pumpName, 'prediction');
     const PredictModel = getPredictModel(this.predictConnection!, predictCollName);
 
-    // Ambil 1 doc prediksi terbaru
-    const predictDoc = await PredictModel.findOne().sort({ fetchedAt: -1 });
+    const predictDoc = await PredictModel.findOne().sort({ fetchedAt: -1 }).lean();
 
     const forecastData: TimeSeriesData[] = [];
-    let location = [-6.1754, 106.8272]; // Default Jakarta
+    let location = [-6.1754, 106.8272];
 
     if (predictDoc) {
-      if (predictDoc.pumpLat && predictDoc.pumpLng) {
-        location = [predictDoc.pumpLat, predictDoc.pumpLng];
-      }
+      // @ts-ignore
+      if (predictDoc.pumpLat && predictDoc.pumpLng) location = [predictDoc.pumpLat, predictDoc.pumpLng];
 
+      // @ts-ignore
       if (predictDoc.hourly && predictDoc.hourly.time) {
-        // Tentukan titik potong waktu agar history & forecast tidak overlap
-        let lastHistoryTime = historyData.length > 0
-            ? new Date(historyData[historyData.length - 1].time)
-            : startTime;
 
+        // PERBAIKAN DI SINI:
+        // Jangan hitung lastHistoryTime dari string array historyData.
+        // Langsung pakai 'effectiveHistoryEnd' sebagai patokan.
+        // Apa pun yang LEBIH BESAR dari effectiveHistoryEnd adalah FORECAST.
+
+        // @ts-ignore
         predictDoc.hourly.time.forEach((timeStr, index) => {
           const itemTime = this.parseTimeString(timeStr);
 
-          // Filter: > lastHistoryTime DAN <= endTime
-          if (itemTime > lastHistoryTime && itemTime <= endTime) {
+          // Logic Forecast:
+          // 1. Waktu item harus > Batas History (Masa Depan)
+          // 2. Waktu item harus <= Batas Akhir Filter (5 jam ke depan / 16 hari ke depan)
+          if (itemTime > effectiveHistoryEnd && itemTime <= endTime) {
             forecastData.push({
               time: timeStr.replace('T', ' '),
+              // @ts-ignore
               value: predictDoc.hourly.rain[index] || 0
             });
           }
@@ -133,27 +136,21 @@ export class OpenMeteoService {
       }
     }
 
-    if (historyData.length === 0 && forecastData.length === 0) {
-      return null;
-    }
-
     // ==========================================
-    // 3. HITUNG SUMMARY & RESULT
+    // 3. RESULT
     // ==========================================
-    const summary = calculateSummary(historyData);
-
-    const bounds = [
-      [location[0] - 0.01, location[1] - 0.01],
-      [location[0] + 0.01, location[1] + 0.01]
-    ];
+    if (historyData.length === 0 && forecastData.length === 0) return null;
 
     return {
       pumpHouse: pumpName,
-      bounds: bounds,
+      bounds: [
+        [location[0] - 0.01, location[1] - 0.01],
+        [location[0] + 0.01, location[1] + 0.01]
+      ],
       location: location,
-      history: historyData,   // Array History
-      forecast: forecastData, // Array Prediksi
-      summary: summary        // Object Summary
+      history: historyData,
+      forecast: forecastData,
+      summary: calculateSummary(historyData)
     };
   }
 }
