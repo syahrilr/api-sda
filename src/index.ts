@@ -1,4 +1,5 @@
 import express from 'express';
+import cors from 'cors';
 import dotenv from 'dotenv';
 import swaggerUi from 'swagger-ui-express';
 import { swaggerSpec } from './config/swagger';
@@ -12,10 +13,17 @@ import { errorHandler } from './middleware/errorHandler';
 dotenv.config();
 
 const app = express();
+
+// ==========================================
+// 2. PASANG CORS (Paling Atas)
+// ==========================================
+// Ini mengizinkan semua domain/IP untuk mengakses API
+app.use(cors());
+
 app.use(express.json());
 
 // ==========================================
-// 1. INITIALIZE APP & DATABASE
+// 3. INITIALIZE APP & DATABASE
 // ==========================================
 const initializeApp = async () => {
   try {
@@ -36,7 +44,7 @@ const initializeApp = async () => {
 };
 
 // ==========================================
-// 2. REGISTER ROUTES
+// 4. REGISTER ROUTES
 // ==========================================
 
 // API Routes
@@ -56,10 +64,8 @@ app.use('/health', (req, res) => {
 });
 
 // ==========================================
-// 3. SWAGGER (ROOT /)
+// 5. SWAGGER (ROOT /)
 // ==========================================
-// Diletakkan di bawah route API agar tidak mengganggu route lain
-// Akses dokumentasi langsung di http://IP:PORT/
 app.use('/', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // Global Error Handler
@@ -68,12 +74,11 @@ app.use(errorHandler);
 const PORT = process.env.PORT || 3000;
 
 // ==========================================
-// 4. START SERVER
+// 6. START SERVER
 // ==========================================
 initializeApp().then(() => {
   app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
-    // Update Log Info
     console.log(`📄 Swagger Docs available at http://192.168.5.173:${PORT}/`);
   });
 });
