@@ -1,9 +1,8 @@
 import { Connection } from 'mongoose';
 import { getRainfallModel } from '../models/rainfall.model';
 import { getPredictionModel } from '../models/prediction.model';
-import { getTimeWindow } from '../utils/dateHelper';
-import { dbManager } from '../config/database';
 import { RainfallDataResult, TimeSeriesData } from '../types/response.types';
+import { calculateSummary } from '../utils/calcHelper';
 
 export class RainfallService {
   private radarConnection: Connection | null = null;
@@ -34,66 +33,95 @@ export class RainfallService {
     return new Date(tempDate.getTime() - (7 * 60 * 60 * 1000));
   }
 
-  async getPumpHouseWindowData(name: string, referenceDate: Date = new Date()): Promise<RainfallDataResult | null> {
-    const { startTime, endTime } = getTimeWindow(referenceDate);
-    const splitTime = referenceDate;
+  async getPumpHouseWindowData(name: string, startTime: Date, endTime: Date): Promise<RainfallDataResult | null> {
 
-    console.log('\n========================================');
     console.log(`🔍 [RainfallService] Request: ${name}`);
+    console.time('fetchHistory'); // Debug timer
 
-    // 1. AMBIL DATA RADAR (HISTORY)
+    // ==========================================
+    // 1. AMBIL DATA HISTORY (OPTIMIZED)
+    // ==========================================
     const radarModel = getRainfallModel(this.radarConnection!);
     const startRadarStr = this.formatToRadarString(startTime);
-    const splitRadarStr = this.formatToRadarString(splitTime);
+    const endRadarStr = this.formatToRadarString(endTime);
 
+    // OPTIMASI QUERY:
+    // 1. Filter marker di level DB
+    // 2. Select hanya field yang dibutuhkan + 'markers.$' (hanya return array element yg match)
+    // 3. Gunakan .lean() agar return plain JSON (sangat cepat untuk ribuan data)
     const radarRecords = await radarModel.find({
       'markers.name': { $regex: name, $options: 'i' },
       'metadata.radarTime': {
         $gte: startRadarStr,
-        $lte: splitRadarStr
+        $lte: endRadarStr
       }
-    }).sort({ 'metadata.radarTime': 1 });
+    })
+    .select({
+      'metadata.radarTime': 1, // Ambil Waktu
+      'markers.$': 1           // MAGIC: Hanya ambil 1 marker yang cocok dari array!
+    })
+    .sort({ 'metadata.radarTime': 1 })
+    .lean(); // Skip overhead Mongoose Document
 
-    const historicalData: TimeSeriesData[] = radarRecords.map(record => {
-      const marker = record.markers.find(m => m.name.toLowerCase().includes(name.toLowerCase()));
+    console.timeEnd('fetchHistory'); // Lihat bedanya di console log
+
+    // Mapping data dari hasil lean query
+    const historyData: TimeSeriesData[] = radarRecords.map((record: any) => {
+      // Karena projection markers.$, array markers pasti cuma isi 1 item (item yg dicari)
+      const marker = record.markers && record.markers.length > 0 ? record.markers[0] : null;
       return {
         time: record.metadata.radarTime,
         value: marker ? marker.rainRate : 0
       };
     });
 
-    // --- PERBAIKAN LOGIKA LOCATION ---
+    // ==========================================
+    // 2. AMBIL LOCATION & BOUNDS (TERPISAH)
+    // ==========================================
+    // Kita query terpisah ambil 1 record terakhir untuk info lokasi.
+    // Ini jauh lebih ringan daripada mengambil info lokasi di setiap row history.
+
     let bounds: number[][] = [];
     let location: number[] = [];
 
-    if (radarRecords.length > 0) {
-      const last = radarRecords[radarRecords.length - 1];
+    const lastRecord = await radarModel.findOne({
+      'markers.name': { $regex: name, $options: 'i' },
+      'metadata.radarTime': { $lte: endRadarStr }
+    })
+    .sort({ 'metadata.radarTime': -1 })
+    .select('bounds location markers.$') // Tetap pakai projection biar ringan
+    .lean();
 
-      // Bounds tetap ambil dari radar (area cakupan gambar)
-      bounds = [last.bounds.sw, last.bounds.ne];
+    if (lastRecord) {
+        // @ts-ignore
+        bounds = [lastRecord.bounds.sw, lastRecord.bounds.ne];
 
-      // LOCATION: Cari koordinat spesifik di dalam markers, BUKAN lokasi radar
-      const specificMarker = last.markers.find(m =>
-        m.name.toLowerCase().includes(name.toLowerCase())
-      );
-
-      if (specificMarker) {
-        // Ambil koordinat Rumah Pompa (lat, lng)
-        location = [specificMarker.lat, specificMarker.lng];
-      } else {
-        // Fallback ke lokasi radar jika marker anehnya tidak ketemu
-        location = last.location.coordinates;
-      }
+        // @ts-ignore
+        const specificMarker = lastRecord.markers && lastRecord.markers[0];
+        if (specificMarker) {
+            location = [specificMarker.lat, specificMarker.lng];
+        } else {
+            // @ts-ignore
+            location = lastRecord.location.coordinates;
+        }
     }
 
-    // 2. AMBIL DATA PREDIKSI (FUTURE)
-    const PredictionModel = getPredictionModel(this.predictionConnection!);
-    const predictionDoc = await PredictionModel.findOne().sort({ createdAt: -1 });
-
+    // ==========================================
+    // 3. AMBIL DATA PREDIKSI (FORECAST)
+    // ==========================================
     const forecastData: TimeSeriesData[] = [];
+    const PredictionModel = getPredictionModel(this.predictionConnection!);
+
+    // Gunakan lean() juga untuk prediksi
+    const predictionDoc = await PredictionModel.findOne().sort({ createdAt: -1 }).lean();
 
     if (predictionDoc && predictionDoc.predictions) {
       const basePredictionTime = this.parseRadarString(predictionDoc.timestamp);
+
+      let lastHistoryTime = historyData.length > 0
+        ? this.parseRadarString(historyData[historyData.length - 1].time)
+        : startTime;
+
       const predictionKeys = Object.keys(predictionDoc.predictions)
         .map(Number)
         .sort((a, b) => a - b);
@@ -101,7 +129,8 @@ export class RainfallService {
       predictionKeys.forEach(minutesAhead => {
         const forecastTime = new Date(basePredictionTime.getTime() + (minutesAhead * 60000));
 
-        if (forecastTime > splitTime && forecastTime <= endTime) {
+        if (forecastTime > lastHistoryTime && forecastTime <= endTime) {
+           // @ts-ignore
            const locData = (predictionDoc.predictions[String(minutesAhead)] as any[]).find(
              (p: any) => p.name.toLowerCase().includes(name.toLowerCase())
            );
@@ -115,40 +144,46 @@ export class RainfallService {
            }
         }
       });
-    }
 
-    // Fallback Location (Jika history kosong, ambil lokasi dari data prediksi)
-    if (location.length === 0 && predictionDoc && predictionDoc.predictions['10']) {
+      // Fallback Location dari prediksi jika history kosong
+      // @ts-ignore
+      if (location.length === 0 && predictionDoc.predictions['10']) {
+        // @ts-ignore
         const fallbackLoc = (predictionDoc.predictions['10'] as any[]).find(
             (p: any) => p.name.toLowerCase().includes(name.toLowerCase())
         );
         if (fallbackLoc) {
             location = [fallbackLoc.lat, fallbackLoc.lng];
-            // Update bounds agar fokus ke titik prediksi
             bounds = [
               [fallbackLoc.lat - 0.05, fallbackLoc.lng - 0.05],
               [fallbackLoc.lat + 0.05, fallbackLoc.lng + 0.05]
             ];
         }
+      }
     }
 
-    if (historicalData.length === 0 && forecastData.length === 0) {
+    if (historyData.length === 0 && forecastData.length === 0) {
       return null;
     }
 
-    const combinedData = [...historicalData, ...forecastData];
+    // ==========================================
+    // 4. HITUNG SUMMARY
+    // ==========================================
+    const summary = calculateSummary(historyData);
 
     return {
       pumpHouse: name,
       bounds: bounds,
-      location: location, // Sekarang sudah benar (koordinat rumah pompa)
-      data: combinedData
+      location: location,
+      history: historyData,
+      forecast: forecastData,
+      summary: summary
     };
   }
 
   async getLatestRecord(): Promise<any> {
     const RainfallRecord = getRainfallModel(this.radarConnection!);
-    return await RainfallRecord.findOne().sort({ 'metadata.radarTime': -1 });
+    return await RainfallRecord.findOne().sort({ 'metadata.radarTime': -1 }).lean();
   }
 }
 

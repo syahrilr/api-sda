@@ -1,21 +1,24 @@
-// src/controllers/rainfall.controller.ts
+// src/controllers/openMeteo.controller.ts
 import { Request, Response, NextFunction } from 'express';
-import rainfallService from '../services/rainfall.service';
+import openMeteoService from '../services/openMeteo.service';
 import { ApiResponse } from '../types/response.types';
 import { isValidDateString } from '../utils/dateHelper';
 
-export class RainfallController {
+export class OpenMeteoController {
 
-  async getRainfallByPumpHouse(req: Request, res: Response, next: NextFunction) {
+  async getRainfall(req: Request, res: Response, next: NextFunction) {
     try {
       const { name } = req.params;
       const dateQuery = req.query.date as string;
-      const rangeQuery = req.query.range as string; // 'today', '1w', '1m', '2m', '3m'
+      const rangeQuery = req.query.range as string; // 'today', '1w', '1m', '3m'
 
-      // Default: Hari ini (Start 00:00 - End Sekarang/Nanti)
+      // Default: Hari ini
       let endDate = new Date();
+      // Kita tambahkan buffer 48 jam ke depan untuk default view agar prediksi terlihat
+      endDate.setHours(endDate.getHours() + 48);
+
       let startDate = new Date();
-      startDate.setHours(0, 0, 0, 0); // Default start hari ini jam 00:00
+      startDate.setHours(0, 0, 0, 0); // Default start jam 00:00 hari ini
 
       // CASE 1: User minta tanggal spesifik (?date=2025-11-25)
       if (dateQuery && isValidDateString(dateQuery)) {
@@ -28,9 +31,9 @@ export class RainfallController {
       }
       // CASE 2: User minta range (?range=1w)
       else if (rangeQuery) {
-        endDate = new Date(); // Sampai detik ini
-        // Kita set endDate sedikit ke depan agar prediksi dekat-dekat ini masuk
-        endDate.setHours(endDate.getHours() + 2);
+        // Reset endDate ke saat ini + buffer prediksi
+        endDate = new Date();
+        endDate.setHours(endDate.getHours() + 48);
 
         startDate = new Date();
 
@@ -54,15 +57,15 @@ export class RainfallController {
         }
       }
 
-      console.log(`\n📅 Date Filter: ${startDate.toISOString()} s/d ${endDate.toISOString()}`);
+      console.log(`\n📅 [OpenMeteo] Date Filter: ${startDate.toISOString()} s/d ${endDate.toISOString()}`);
 
       // Panggil Service dengan Start & End Date eksplisit
-      const result = await rainfallService.getPumpHouseWindowData(name, startDate, endDate);
+      const result = await openMeteoService.getOpenMeteoData(name, startDate, endDate);
 
       if (!result) {
         return res.status(404).json({
           success: false,
-          message: `No rainfall data found for '${name}' in range`
+          message: `No Open-Meteo data found for '${name}' in range`
         });
       }
 
@@ -72,23 +75,10 @@ export class RainfallController {
       };
 
       res.json(response);
-
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  async getLatestRainfall(req: Request, res: Response, next: NextFunction) {
-    try {
-      const record = await rainfallService.getLatestRecord();
-      if (!record) {
-        return res.status(404).json({ success: false, error: 'No data available' });
-      }
-      res.json({ success: true, data: record });
     } catch (error) {
       next(error);
     }
   }
 }
 
-export default new RainfallController();
+export default new OpenMeteoController();

@@ -9,8 +9,8 @@ interface DatabaseConfig {
 }
 
 interface DatabaseConnections {
-  curahHujan: typeof mongoose; // Untuk RainfallRecord (Radar)
-  prediksi: typeof mongoose;   // Untuk Prediction (Forecast) - SEKARANG DI DB YANG SAMA
+  main: typeof mongoose;    // db_curah_hujan (Berisi: Radar History, Radar Prediksi, OpenMeteo History)
+  predict: typeof mongoose; // db-predict-ch (Berisi: OpenMeteo Prediksi)
 }
 
 class DatabaseManager {
@@ -52,18 +52,15 @@ class DatabaseManager {
     }
   }
 
-  /**
-   * Connect ke database
-   */
   async connectAll() {
-    const dbName = process.env.DB_CURAH_HUJAN || 'db_curah_hujan';
+    const dbMainName = process.env.DB_CURAH_HUJAN || 'db_curah_hujan';
+    const dbPredictName = 'db-predict-ch';
 
-    // 1. Database Radar (db_curah_hujan)
-    await this.connect(dbName, 'curahHujan');
+    // 1. Koneksi Utama (Menampung data Radar & History OpenMeteo)
+    await this.connect(dbMainName, 'main');
 
-    // 2. Database Prediksi (SEKARANG SAMA: db_curah_hujan)
-    // Karena Python script menyimpannya di db_curah_hujan > prediksi
-    await this.connect(dbName, 'prediksi');
+    // 2. Koneksi Khusus Prediksi OpenMeteo
+    await this.connect(dbPredictName, 'predict');
   }
 
   getConnection(name: keyof DatabaseConnections) {
